@@ -11,5 +11,8 @@
     },
     "description": "Collaborative notepad with real-time editing",
     "author": "GREAT98u",
-    "license": "ISC"
+    "license": "ISC",
+    "dependencies": {
+        "@y/websocket-server": "^0.1.1"
+    }
 }
