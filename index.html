@@ -1,0 +1,170 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Collab Pad</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdn.jsdelivr.net https://unpkg.com; script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    header { display: flex; gap: 12px; align-items: center; padding: 12px; border-bottom: 1px solid #e5e7eb; }
+    .grow { flex: 1; }
+    .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef2ff; }
+    textarea { width: 100%; height: calc(100vh - 60px); border: 0; padding: 12px; outline: none; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    input[type="text"] { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 8px; }
+    label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; user-select: none; }
+    button { padding: 6px 10px; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; }
+  </style>
+
+  <!-- Import maps to load ES modules from CDNs -->
+  <script type="importmap">
+  {
+    "imports": {
+      "yjs": "https://cdn.jsdelivr.net/npm/yjs@13.6.18/+esm",
+      "y-webrtc": "https://cdn.jsdelivr.net/npm/y-webrtc@10.6.9/+esm",
+      "y-indexeddb": "https://cdn.jsdelivr.net/npm/y-indexeddb@1.3.11/+esm"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header>
+    <strong>Collab Pad</strong>
+
+    <div class="grow"></div>
+
+    <label title="Turn on to collaborate with up to 4 people">
+      <input id="collabToggle" type="checkbox" />
+      Collaborate
+    </label>
+
+    <input id="room" type="text" value="room-dev-notepad" size="22" title="Room name (everyone must use the same)" />
+    <span class="badge" id="peerCount">peers: 1</span>
+
+    <button id="exportBtn" title="Export current text to a .txt file">Export</button>
+    <input id="importFile" type="file" accept=".txt" style="display:none" />
+    <button id="importBtn" title="Import a .txt file (replaces current doc)">Import</button>
+  </header>
+
+  <textarea id="editor" spellcheck="false" placeholder="Type here..."></textarea>
+
+  <script type="module">
+    import * as Y from "yjs";
+    import { WebrtcProvider } from "y-webrtc";
+    import { IndexeddbPersistence } from "y-indexeddb";
+
+    // --- Core Yjs doc + shared text
+    let ydoc = new Y.Doc();
+    let ytext = ydoc.getText("shared");
+
+    // --- Local persistence: survives restarts (per room)
+    let persistence = null;
+
+    // --- P2P collaboration provider (created on-demand)
+    let provider = null;
+
+    // --- UI elements
+    const editor = document.getElementById("editor");
+    const collabToggle = document.getElementById("collabToggle");
+    const roomInput = document.getElementById("room");
+    const peerCount = document.getElementById("peerCount");
+    const exportBtn = document.getElementById("exportBtn");
+    const importBtn = document.getElementById("importBtn");
+    const importFile = document.getElementById("importFile");
+
+    // Keep editor in sync with Y.Text
+    let applyingRemote = false;
+
+    const refreshFromYtext = () => {
+      applyingRemote = true;
+      editor.value = ytext.toString();
+      applyingRemote = false;
+    };
+
+    // Update textarea when remote/local Y changes happen
+    ytext.observe(() => refreshFromYtext());
+
+    // When user types, replace Y text with textarea contents
+    editor.addEventListener("input", () => {
+      if (applyingRemote) return;
+      const curr = ytext.toString();
+      const next = editor.value;
+      // Simple, robust sync: set full content (fine for notepad-sized docs)
+      ydoc.transact(() => {
+        ytext.delete(0, curr.length);
+        ytext.insert(0, next);
+      });
+    });
+
+    // Room lifecycle (reinitialize persistence/provider when room changes)
+    const initRoom = (roomName) => {
+      // Tear down old stuff
+      if (provider) { provider.destroy(); provider = null; }
+      if (persistence) { /* no explicit destroy needed */ persistence = null; }
+
+      // New Y Doc (so each room has isolated history)
+      ydoc.destroy();
+      ydoc = new Y.Doc();
+      ytext = ydoc.getText("shared");
+      ytext.observe(() => refreshFromYtext());
+
+      // Local IndexedDB persistence for this room
+      persistence = new IndexeddbPersistence(`collab-pad-${roomName}`, ydoc);
+      persistence.once("synced", () => {
+        // Load persisted text into the editor when ready
+        refreshFromYtext();
+      });
+
+      // If collaboration toggled ON, connect P2P
+      if (collabToggle.checked) {
+        provider = new WebrtcProvider(roomName, ydoc, {
+          // Keep it small & stable for your use-case
+          maxConns: 4,
+          filterBcConns: true
+        });
+        // Awareness (presence) auto-manages peer states
+      } else {
+        provider = null;
+      }
+
+      // Immediately reflect current content
+      refreshFromYtext();
+    };
+
+    // Peer count UI
+    const updatePeerCount = () => {
+      const n = provider ? provider.awareness.getStates().size : 1; // includes self
+      peerCount.textContent = `peers: ${n}`;
+    };
+    setInterval(updatePeerCount, 1000);
+
+    // React to toggling collaboration
+    collabToggle.addEventListener("change", () => initRoom(roomInput.value.trim()));
+    // React to room changes
+    roomInput.addEventListener("change", () => initRoom(roomInput.value.trim()));
+
+    // Simple Export/Import for local files
+    exportBtn.addEventListener("click", () => {
+      const blob = new Blob([editor.value], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${roomInput.value.trim() || "document"}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+    importBtn.addEventListener("click", () => importFile.click());
+    importFile.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const text = await file.text();
+      ydoc.transact(() => {
+        ytext.delete(0, ytext.length);
+        ytext.insert(0, text);
+      });
+      e.target.value = "";
+    });
+
+    // Initial boot
+    initRoom(roomInput.value.trim());
+  </script>
+</body>
+</html>

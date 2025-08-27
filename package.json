@@ -1,0 +1,15 @@
+{
+    "name": "collab-pad",
+    "version": "0.1.0",
+    "private": true,
+    "main": "main.js",
+    "scripts": {
+        "start": "electron ."
+    },
+    "devDependencies": {
+        "electron": "^31.7.7"
+    },
+    "description": "Collaborative notepad with real-time editing",
+    "author": "GREAT98u",
+    "license": "ISC"
+}
